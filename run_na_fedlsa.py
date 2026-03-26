@@ -8,6 +8,7 @@ import jax.numpy as jnp
 Array = jax.Array
 
 
+
 # ----------------------------
 # Problem / environment setup
 # ----------------------------
