@@ -34,6 +34,7 @@ class HeteroMRP:
     gamma: float
 
 
+
 @dataclass(frozen=True)
 class FedLSAConfig:
     num_rounds: int
