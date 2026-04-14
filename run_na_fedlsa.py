@@ -178,7 +178,7 @@ def main():
     sample_seed_base = 33
 
     fedlsa_cfg = dict(
-        local_steps=2,
+        local_steps=5,
         alpha=1.0,
         n_traj=512,
         t0=1.0,
@@ -189,7 +189,7 @@ def main():
     num_workers = 32
     num_bootstrap = 256
 
-    trajectory_lengths = [1000, 2000, 5000]
+    trajectory_lengths = [10000, 20000, 50000]
     confidence_levels = [0.05, 0.10, 0.20]
 
     seed = 7
