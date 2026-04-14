@@ -41,6 +41,7 @@ def _run_trajectory_batch(kwargs: Dict[str, Any]) -> Dict[str, np.ndarray]:
     from garnet import Garnet
     from fedlsa import FedLSAConfig, fedlsa_train
     from inference import multiplier_bootstrap_ci_jit
+    from baseline_lyapunov import run_lyapunov_baseline
 
     g = Garnet(**kwargs["garnet_cfg"])
     g.set_sample_rng(np.random.default_rng(kwargs["sample_seed"]))
@@ -77,12 +78,28 @@ def _run_trajectory_batch(kwargs: Dict[str, Any]) -> Dict[str, np.ndarray]:
         alpha=jnp.asarray(kwargs["ci_alpha"]),
     )
 
+    lyap = run_lyapunov_baseline(
+        garnet_cfg=kwargs["garnet_cfg"],
+        num_rounds=kwargs["num_rounds"],
+        local_steps=kwargs["local_steps"],
+        alpha_lr=kwargs["alpha"],
+        t0=kwargs["t0"],
+        gamma_eta=kwargs["gamma_eta"],
+        gamma_H=kwargs["gamma_H"],
+        n_traj=kwargs["n_traj_batch"],
+        sample_seed=kwargs["sample_seed"],
+        u=np.asarray(kwargs["u"]),
+        ci_alpha=kwargs["ci_alpha"],
+    )
+
     return {
         "theta_proj":     np.asarray(theta_proj),                   # [R_batch, 1]
         "ci_quantile_lo": np.asarray(ci["ci_quantile_lo"]),         # [R_batch, 1]
         "ci_quantile_hi": np.asarray(ci["ci_quantile_hi"]),
         "ci_normal_lo":   np.asarray(ci["ci_normal_lo"]),
         "ci_normal_hi":   np.asarray(ci["ci_normal_hi"]),
+        "ci_lyap_lo":     np.asarray(lyap["ci_lyap_lo"]),           # [R_batch, 1]
+        "ci_lyap_hi":     np.asarray(lyap["ci_lyap_hi"]),
     }
 
 
@@ -147,20 +164,25 @@ def run_one_trajectory_length(
     q_hi = cat("ci_quantile_hi")
     n_lo = cat("ci_normal_lo")
     n_hi = cat("ci_normal_hi")
+    l_lo = cat("ci_lyap_lo")
+    l_hi = cat("ci_lyap_hi")
 
     theta_star_proj = float(np.asarray(theta_star) @ u_np)
     bias = float(abs(theta_proj_all.mean() - theta_star_proj))
 
     covered_q = (q_lo[:, 0] <= theta_star_proj) & (theta_star_proj <= q_hi[:, 0])
     covered_n = (n_lo[:, 0] <= theta_star_proj) & (theta_star_proj <= n_hi[:, 0])
+    covered_l = (l_lo[:, 0] <= theta_star_proj) & (theta_star_proj <= l_hi[:, 0])
 
     return {
         "num_rounds": num_rounds,
         "bias": bias,
         "cov_q": float(covered_q.mean()),
         "cov_n": float(covered_n.mean()),
+        "cov_l": float(covered_l.mean()),
         "ci_q_width": float((q_hi - q_lo).mean()),
         "ci_n_width": float((n_hi - n_lo).mean()),
+        "ci_l_width": float((l_hi - l_lo).mean()),
     }
 
 
@@ -222,9 +244,9 @@ def main():
         for ci_alpha in confidence_levels:
             print(f"\n=== confidence level 1 − α = {1 - ci_alpha:.2f} "
                   f"(α = {ci_alpha}) ===", flush=True)
-            print(f"{'T':>6}  {'bias':>8}  {'cov_q':>6}  {'cov_n':>6}  "
-                  f"{'w_q':>8}  {'w_n':>8}", flush=True)
-            print("-" * 56, flush=True)
+            print(f"{'T':>6}  {'bias':>8}  {'cov_q':>6}  {'cov_n':>6}  {'cov_l':>6}  "
+                  f"{'w_q':>8}  {'w_n':>8}  {'w_l':>8}", flush=True)
+            print("-" * 72, flush=True)
 
             for T in trajectory_lengths:
                 res = run_one_trajectory_length(
@@ -241,8 +263,9 @@ def main():
                     seed=seed,
                 )
                 print(f"{T:>6}  {res['bias']:>8.4f}  {res['cov_q']:>6.3f}  "
-                      f"{res['cov_n']:>6.3f}  {res['ci_q_width']:>8.4f}  "
-                      f"{res['ci_n_width']:>8.4f}", flush=True)
+                      f"{res['cov_n']:>6.3f}  {res['cov_l']:>6.3f}  "
+                      f"{res['ci_q_width']:>8.4f}  {res['ci_n_width']:>8.4f}  "
+                      f"{res['ci_l_width']:>8.4f}", flush=True)
 
                 records.append({
                     "T": T,
@@ -254,8 +277,10 @@ def main():
                     "bias": res["bias"],
                     "cov_q": res["cov_q"],
                     "cov_n": res["cov_n"],
+                    "cov_l": res["cov_l"],
                     "ci_q_width": res["ci_q_width"],
                     "ci_n_width": res["ci_n_width"],
+                    "ci_l_width": res["ci_l_width"],
                 })
                 pd.DataFrame(records).to_csv(results_csv, index=False)
                 sweep_bar.update(1)
