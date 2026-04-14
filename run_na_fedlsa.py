@@ -181,17 +181,17 @@ def main():
     sample_seed_base = 33
 
     fedlsa_cfg = dict(
-        local_steps=20,
+        local_steps=2,
         alpha=1.0,
-        n_traj=128,
+        n_traj=512,
         t0=1.0,
         gamma_eta=0.6,
         gamma_H=0.0,
     )
 
-    num_workers = 8
+    num_workers = 32
     num_bootstrap = 256
-    boot_chunk_size = 32   # K-chunk for L2 locality; sweep 16/32/64 per machine
+    boot_chunk_size = 64   # K-chunk for L2 locality; sweep 16/32/64 per machine
 
     trajectory_lengths = [1000, 2000, 5000]
     confidence_levels = [0.05, 0.10, 0.20]
