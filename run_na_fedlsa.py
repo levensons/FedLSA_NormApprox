@@ -6,6 +6,12 @@ Sweeps over (trajectory length, confidence level), parallelizing the
 `ProcessPoolExecutor`. Each worker owns its own Garnet instance and its
 own JAX state (so JIT compilations live per-worker, not per-call).
 """
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("XLA_FLAGS", "--xla_cpu_multi_thread_eigen=false")
+
 from typing import Dict, Any, List
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
