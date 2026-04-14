@@ -129,6 +129,7 @@ def fedlsa_train(
     theta0: Optional[Array] = None,
     progress: bool = True,
     progress_desc: Optional[str] = None,
+    boot_chunk_size: int = 32,
 ) -> Dict[str, Any]:
     """
     FedLSA with i.i.d. sampling from Garnet and, when `num_bootstrap > 0`,
@@ -152,15 +153,18 @@ def fedlsa_train(
     R = config.n_traj
     D = garnet.p
     B = num_bootstrap
-    K = 1 + B
 
     if theta0 is None:
         theta_main0 = jnp.zeros((R, D))
     else:
         theta_main0 = theta0
 
-    # theta [R, K, D]:  k=0 main, k=1..B bootstrap replicates (all start at θ₀)
-    theta = jnp.broadcast_to(theta_main0[:, None, :], (R, K, D))
+    # Main and bootstrap are kept in separate tensors so the bootstrap K
+    # dimension can be processed in L2-friendly chunks (the full
+    # [R, 1+B, ...] working set otherwise spills L2 → contention in shared L3
+    # when many workers run concurrently).
+    theta_main = jnp.broadcast_to(theta_main0[:, None, :], (R, 1, D))   # [R, 1, D]
+    theta_boot = jnp.broadcast_to(theta_main0[:, None, :], (R, B, D))   # [R, B, D]
 
     step_sizes_hist: List[float] = []
     H_hist: List[int] = []
@@ -187,27 +191,36 @@ def fedlsa_train(
 
         A_round, b_round = _sample_round_Ab(garnet, H_t=H_t, R=R)
         N = A_round.shape[2]
+        alpha_t_arr = jnp.asarray(alpha_t)
 
-        # Per-local-step weights: [H_t, R, K, N]
-        #   k=0           → main, w ≡ 1
-        #   k=1..B        → bootstrap, standardized Beta multipliers
+        # Main update (K=1, w ≡ 1).
         main_w = jnp.ones((H_t, R, 1, N))
+        theta_main = _fedlsa_one_round(
+            theta_main, A_round, b_round, alpha_t_arr, main_w
+        )
+
+        # Bootstrap update, processed in K-chunks that fit in L2.
+        # Draw the full [H_t, R, B, N] weight tensor so the RNG stream is
+        # independent of boot_chunk_size (results are bitwise reproducible
+        # across chunk sizes).
         if B > 0:
             boot_w = _sample_bootstrap_weights(boot_rng, (H_t, R, B, N))
-            weights_round = jnp.concatenate([main_w, boot_w], axis=2)
-        else:
-            weights_round = main_w
-
-        theta = _fedlsa_one_round(
-            theta, A_round, b_round, jnp.asarray(alpha_t), weights_round
-        )
+            chunks = []
+            for k0 in range(0, B, boot_chunk_size):
+                k1 = min(k0 + boot_chunk_size, B)
+                chunks.append(_fedlsa_one_round(
+                    theta_boot[:, k0:k1, :],
+                    A_round, b_round, alpha_t_arr,
+                    boot_w[:, :, k0:k1, :],
+                ))
+            theta_boot = jnp.concatenate(chunks, axis=1) if len(chunks) > 1 else chunks[0]
 
         step_sizes_hist.append(alpha_t)
         H_hist.append(H_t)
 
     return {
-        "theta_final": theta[:, 0, :],              # [R, D]
-        "theta_boot_final": theta[:, 1:, :],        # [R, B, D]
+        "theta_final": theta_main[:, 0, :],         # [R, D]
+        "theta_boot_final": theta_boot,             # [R, B, D]
         "step_sizes": jnp.asarray(step_sizes_hist), # [T]
         "local_steps": np.asarray(H_hist),          # [T]
     }
