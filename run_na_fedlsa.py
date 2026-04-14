@@ -61,7 +61,6 @@ def _run_trajectory_batch(kwargs: Dict[str, Any]) -> Dict[str, np.ndarray]:
         num_bootstrap=kwargs["num_bootstrap"],
         boot_seed=kwargs["key_seed"],
         progress=False,
-        boot_chunk_size=kwargs.get("boot_chunk_size", 32),
     )
     theta_hat = out["theta_final"]              # [R_batch, D]
     theta_boot = out["theta_boot_final"]         # [R_batch, B, D]
@@ -108,7 +107,6 @@ def run_one_trajectory_length(
     num_bootstrap: int = 100,
     ci_alpha: float = 0.05,
     seed: int = 7,
-    boot_chunk_size: int = 32,
 ) -> Dict[str, float]:
     """Fan out `n_traj` trajectories across `num_workers` worker processes."""
     # Split n_traj across workers (possibly uneven remainder)
@@ -134,7 +132,6 @@ def run_one_trajectory_length(
             "num_bootstrap": num_bootstrap,
             "ci_alpha": ci_alpha,
             "key_seed": seed + 1000 + w,              # independent bootstrap rng
-            "boot_chunk_size": boot_chunk_size,
         })
 
     results: List[Dict[str, np.ndarray]] = list(
@@ -191,7 +188,6 @@ def main():
 
     num_workers = 8
     num_bootstrap = 256
-    boot_chunk_size = 32   # K-chunk for L2 locality; sweep 16/32/64 per machine
 
     trajectory_lengths = [1000, 2000, 5000]
     confidence_levels = [0.05, 0.10, 0.20]
@@ -243,7 +239,6 @@ def main():
                     num_bootstrap=num_bootstrap,
                     ci_alpha=ci_alpha,
                     seed=seed,
-                    boot_chunk_size=boot_chunk_size,
                 )
                 print(f"{T:>6}  {res['bias']:>8.4f}  {res['cov_q']:>6.3f}  "
                       f"{res['cov_n']:>6.3f}  {res['ci_q_width']:>8.4f}  "

@@ -38,7 +38,6 @@ def run(prefetch: bool):
         g, cfg,
         num_bootstrap=B_BOOT, boot_seed=1007,
         progress=False,
-        boot_chunk_size=32,
         prefetch_weights=prefetch,
     )
     out["theta_final"].block_until_ready()
