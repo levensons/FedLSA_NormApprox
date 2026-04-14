@@ -1,4 +1,5 @@
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
@@ -130,6 +131,7 @@ def fedlsa_train(
     progress: bool = True,
     progress_desc: Optional[str] = None,
     boot_chunk_size: int = 32,
+    prefetch_weights: bool = True,
 ) -> Dict[str, Any]:
     """
     FedLSA with i.i.d. sampling from Garnet and, when `num_bootstrap > 0`,
@@ -180,43 +182,79 @@ def fedlsa_train(
             leave=False,
         )
 
-    for t in round_iter:
-        H_t = max(
+    def _H_at(t_idx: int) -> int:
+        return max(
             1,
-            int(math.ceil(config.local_steps * (t + 1) ** config.gamma_H)),
-        )
-        alpha_t = float(
-            config.alpha * (t + config.t0) ** (-config.gamma_eta)
+            int(math.ceil(config.local_steps * (t_idx + 1) ** config.gamma_H)),
         )
 
-        A_round, b_round = _sample_round_Ab(garnet, H_t=H_t, R=R)
-        N = A_round.shape[2]
-        alpha_t_arr = jnp.asarray(alpha_t)
-
-        # Main update (K=1, w ≡ 1).
-        main_w = jnp.ones((H_t, R, 1, N))
-        theta_main = _fedlsa_one_round(
-            theta_main, A_round, b_round, alpha_t_arr, main_w
+    # Background prefetch of bootstrap weights. A single-worker thread
+    # pool keeps RNG consumption serial so results stay bitwise
+    # reproducible regardless of prefetch timing. numpy's Beta sampler
+    # releases the GIL, so it runs truly in parallel with the main
+    # thread's JAX dispatch and XLA's compute of the previous round.
+    N_agents = garnet.nenvs
+    use_prefetch = prefetch_weights and B > 0
+    if use_prefetch:
+        sample_pool = ThreadPoolExecutor(max_workers=1)
+        pending = sample_pool.submit(
+            _sample_bootstrap_weights, boot_rng,
+            (_H_at(0), R, B, N_agents),
         )
+    else:
+        sample_pool = None
+        pending = None
 
-        # Bootstrap update, processed in K-chunks that fit in L2.
-        # Draw the full [H_t, R, B, N] weight tensor so the RNG stream is
-        # independent of boot_chunk_size (results are bitwise reproducible
-        # across chunk sizes).
-        if B > 0:
-            boot_w = _sample_bootstrap_weights(boot_rng, (H_t, R, B, N))
-            chunks = []
-            for k0 in range(0, B, boot_chunk_size):
-                k1 = min(k0 + boot_chunk_size, B)
-                chunks.append(_fedlsa_one_round(
-                    theta_boot[:, k0:k1, :],
-                    A_round, b_round, alpha_t_arr,
-                    boot_w[:, :, k0:k1, :],
-                ))
-            theta_boot = jnp.concatenate(chunks, axis=1) if len(chunks) > 1 else chunks[0]
+    try:
+        for t in round_iter:
+            H_t = _H_at(t)
+            alpha_t = float(
+                config.alpha * (t + config.t0) ** (-config.gamma_eta)
+            )
 
-        step_sizes_hist.append(alpha_t)
-        H_hist.append(H_t)
+            A_round, b_round = _sample_round_Ab(garnet, H_t=H_t, R=R)
+            N = A_round.shape[2]
+            alpha_t_arr = jnp.asarray(alpha_t)
+
+            # Obtain this round's bootstrap weights, then IMMEDIATELY
+            # kick off next round's sampling so it runs in parallel
+            # with the JAX dispatch + XLA compute below.
+            if B > 0:
+                if use_prefetch:
+                    boot_w = pending.result()
+                    if t + 1 < config.num_rounds:
+                        pending = sample_pool.submit(
+                            _sample_bootstrap_weights, boot_rng,
+                            (_H_at(t + 1), R, B, N_agents),
+                        )
+                else:
+                    boot_w = _sample_bootstrap_weights(
+                        boot_rng, (H_t, R, B, N_agents)
+                    )
+
+            # Main update (K=1, w ≡ 1).
+            main_w = jnp.ones((H_t, R, 1, N))
+            theta_main = _fedlsa_one_round(
+                theta_main, A_round, b_round, alpha_t_arr, main_w
+            )
+
+            # Bootstrap update, processed in K-chunks that fit in L2.
+            if B > 0:
+                chunks = []
+                for k0 in range(0, B, boot_chunk_size):
+                    k1 = min(k0 + boot_chunk_size, B)
+                    chunks.append(_fedlsa_one_round(
+                        theta_boot[:, k0:k1, :],
+                        A_round, b_round, alpha_t_arr,
+                        boot_w[:, :, k0:k1, :],
+                    ))
+                theta_boot = jnp.concatenate(chunks, axis=1) if len(chunks) > 1 else chunks[0]
+
+            step_sizes_hist.append(alpha_t)
+            H_hist.append(H_t)
+    finally:
+        if sample_pool is not None:
+            sample_pool.shutdown(wait=True)
 
     return {
         "theta_final": theta_main[:, 0, :],         # [R, D]
