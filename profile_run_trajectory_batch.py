@@ -8,6 +8,9 @@ We separately time:
   4. multiplier_bootstrap_ci_jit (warm)
   5. Whole _run_trajectory_batch (warm — JIT compiled)
 """
+import os
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import time
 import math
 import numpy as np

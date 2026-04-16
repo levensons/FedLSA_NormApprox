@@ -14,6 +14,8 @@ Two investigations:
   C. Parallel scaling with 1 BLAS / Eigen thread per worker
 """
 import os
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import time
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
@@ -52,6 +54,7 @@ def make_kwargs(n_traj_batch, sample_seed, key_seed):
         gamma_H=0.0,
         num_bootstrap=NUM_BOOTSTRAP,
         key_seed=key_seed,
+        boot_chunk_size=64,
     )
 
 

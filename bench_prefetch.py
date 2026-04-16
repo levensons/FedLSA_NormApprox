@@ -4,8 +4,8 @@ Benchmark prefetch_weights on/off for fedlsa_train at production shape.
 Runs two warmups per setting then 3 timed runs. Compares median wall time
 and verifies bitwise equivalence of outputs.
 """
-# import os
-# os.environ["JAX_PLATFORMS"] = "cpu"
+import os
+os.environ["JAX_PLATFORMS"] = "cpu"
 
 import time
 import statistics
