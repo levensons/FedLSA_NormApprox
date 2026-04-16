@@ -1,7 +1,7 @@
 import math
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, List, Sequence, TYPE_CHECKING
 
 import numpy as np
 import jax
@@ -131,6 +131,7 @@ def fedlsa_train(
     progress: bool = True,
     progress_desc: Optional[str] = None,
     prefetch_weights: bool = True,
+    snapshot_rounds: Optional[Sequence[int]] = None,
 ) -> Dict[str, Any]:
     """
     FedLSA with i.i.d. sampling from Garnet and, when `num_bootstrap > 0`,
@@ -166,6 +167,11 @@ def fedlsa_train(
 
     step_sizes_hist: List[float] = []
     H_hist: List[int] = []
+    snap_set = set(int(r) for r in (snapshot_rounds or ()))
+    theta_hist:      List[Array] = []
+    theta_boot_hist: List[Array] = []
+    eta_hist:        List[float] = []
+    rounds_hist:     List[int]   = []
 
     boot_rng = np.random.default_rng(boot_seed)
 
@@ -235,13 +241,25 @@ def fedlsa_train(
 
             step_sizes_hist.append(alpha_t)
             H_hist.append(H_t)
+
+            if (t + 1) in snap_set:
+                theta_hist.append(theta[:, 0, :])
+                theta_boot_hist.append(theta[:, 1:, :])
+                eta_hist.append(alpha_t)
+                rounds_hist.append(t + 1)
     finally:
         if sample_pool is not None:
             sample_pool.shutdown(wait=True)
 
-    return {
+    out = {
         "theta_final": theta[:, 0, :],              # [R, D]
         "theta_boot_final": theta[:, 1:, :],        # [R, B, D]
         "step_sizes": jnp.asarray(step_sizes_hist), # [T]
         "local_steps": np.asarray(H_hist),          # [T]
     }
+    if rounds_hist:
+        out["theta_hist"]      = jnp.stack(theta_hist, axis=0)       # [S, R, D]
+        out["theta_boot_hist"] = jnp.stack(theta_boot_hist, axis=0)  # [S, R, B, D]
+        out["eta_hist"]        = np.asarray(eta_hist)                # [S]
+        out["rounds_hist"]     = np.asarray(rounds_hist)             # [S]
+    return out

@@ -66,7 +66,7 @@ def make_kw(T_):
         garnet_cfg=GARNET_CFG,
         sample_seed=33,
         u=u_np,
-        num_rounds=T_,
+        snapshot_rounds=[T_],
         local_steps=LOCAL_STEPS,
         alpha=ALPHA,
         n_traj_batch=N_TRAJ,
@@ -74,7 +74,6 @@ def make_kw(T_):
         gamma_eta=GAMMA_ETA,
         gamma_H=0.0,
         num_bootstrap=NUM_BOOT,
-        ci_alpha=0.05,
         key_seed=1007,
     )
 

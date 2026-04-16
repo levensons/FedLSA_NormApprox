@@ -43,7 +43,7 @@ def make_kwargs(n_traj_batch, sample_seed, key_seed):
         garnet_cfg=GARNET_CFG,
         sample_seed=sample_seed,
         u=None,                 # filled in inside the worker
-        num_rounds=T,
+        snapshot_rounds=[T],
         local_steps=LOCAL_STEPS,
         alpha=1.0,
         n_traj_batch=n_traj_batch,
@@ -51,7 +51,6 @@ def make_kwargs(n_traj_batch, sample_seed, key_seed):
         gamma_eta=0.6,
         gamma_H=0.0,
         num_bootstrap=NUM_BOOTSTRAP,
-        ci_alpha=0.05,
         key_seed=key_seed,
     )
 
