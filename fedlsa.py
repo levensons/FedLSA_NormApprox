@@ -132,6 +132,7 @@ def fedlsa_train(
     progress_desc: Optional[str] = None,
     prefetch_weights: bool = True,
     snapshot_rounds: Optional[Sequence[int]] = None,
+    theta_star: Optional[Array] = None,
 ) -> Dict[str, Any]:
     """
     FedLSA with i.i.d. sampling from Garnet and, when `num_bootstrap > 0`,
@@ -172,6 +173,8 @@ def fedlsa_train(
     theta_boot_hist: List[Array] = []
     eta_hist:        List[float] = []
     rounds_hist:     List[int]   = []
+    mse_hist:        List[float] = []
+    theta_star_jnp = jnp.asarray(theta_star) if theta_star is not None else None
 
     boot_rng = np.random.default_rng(boot_seed)
 
@@ -242,6 +245,10 @@ def fedlsa_train(
             step_sizes_hist.append(alpha_t)
             H_hist.append(H_t)
 
+            if theta_star_jnp is not None:
+                diff = theta[:, 0, :] - theta_star_jnp       # [R, D]
+                mse_hist.append(float(jnp.mean(jnp.sum(diff ** 2, axis=-1))))
+
             if (t + 1) in snap_set:
                 theta_hist.append(theta[:, 0, :])
                 theta_boot_hist.append(theta[:, 1:, :])
@@ -262,4 +269,6 @@ def fedlsa_train(
         out["theta_boot_hist"] = jnp.stack(theta_boot_hist, axis=0)  # [S, R, B, D]
         out["eta_hist"]        = np.asarray(eta_hist)                # [S]
         out["rounds_hist"]     = np.asarray(rounds_hist)             # [S]
+    if mse_hist:
+        out["mse_hist"] = np.asarray(mse_hist)                       # [T]
     return out

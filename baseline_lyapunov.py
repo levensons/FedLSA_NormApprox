@@ -50,8 +50,14 @@ def run_lyapunov_baseline(
     gamma_H: float,
     n_traj: int,
     sample_seed: int,
+    sigma_burn_in: int = 0,
 ) -> Dict[int, Dict[str, np.ndarray]]:
-    """Multi-T single-loop Lyapunov baseline.
+    """Multi-L single-loop Lyapunov baseline.
+
+    `sigma_burn_in`: skip first `sigma_burn_in` rounds when accumulating
+    Σ̂_ε. Early θ_t are far from θ* and inflate ε = (A − Â)θ_t − (b − b̂);
+    discarding them removes the transient bias. Â, b̂ and the global
+    trajectory θ still update from t=0.
 
     Returns {T_i: {"theta_T_lyap": [R, D], "Sigma": [R, D, D], "eta_T_lyap": float}}
     """
@@ -61,6 +67,10 @@ def run_lyapunov_baseline(
 
     Ts = sorted(int(T) for T in trajectory_lengths)
     T_max = Ts[-1]
+    if sigma_burn_in >= Ts[0] // 2:
+        raise ValueError(
+            f"sigma_burn_in={sigma_burn_in} must be < min(T_i)/2 = {Ts[0] // 2}"
+        )
 
     garnet = Garnet(**garnet_cfg)
     N, D, R = garnet.nenvs, garnet.p, n_traj
@@ -79,7 +89,8 @@ def run_lyapunov_baseline(
     avg_A     = np.zeros((R, N, D, D))
     avg_b     = np.zeros((R, N, D))
     avg_sigma = np.zeros((R, N, D, D))
-    n_samples = 0
+    n_samples     = 0      # for Â, b̂  (counts all rounds)
+    n_eps_samples = 0      # for Σ̂_ε  (excludes burn-in)
 
     theta       = jnp.zeros((R, 1, D))          # global trajectory
     theta_snaps = [jnp.zeros((R, 1, D)) for _ in Ts]  # per-T_i trajectories
@@ -91,23 +102,25 @@ def run_lyapunov_baseline(
         As = np.asarray(A_jax)
         bs = np.asarray(b_jax)
 
-        # Running averages of A, b
+        # Running averages of A, b (always accumulate)
         avg_A = (n_samples * avg_A + As.sum(axis=0)) / (n_samples + H_t)
         avg_b = (n_samples * avg_b + bs.sum(axis=0)) / (n_samples + H_t)
+        n_samples += H_t
 
-        # Centered noise ε = (A − Â)θ − (b − b̂), running average of ε⊗ε
-        th = np.asarray(theta[:, 0, :])                            # [R, D]
-        eps = (np.einsum('hrnij,rj->hrni', As - avg_A[None], th)
-               - (bs - avg_b[None]))                               # [H, R, N, D]
-        avg_sigma = (n_samples * avg_sigma
-                     + np.einsum('hrni,hrnj->rnij', eps, eps)) / (n_samples + H_t)
+        # Centered noise ε = (A − Â)θ − (b − b̂), running average of ε⊗ε.
+        # Skip while θ_t is in transient regime to avoid inflating Σ̂_ε.
+        if t >= sigma_burn_in:
+            th = np.asarray(theta[:, 0, :])                            # [R, D]
+            eps = (np.einsum('hrnij,rj->hrni', As - avg_A[None], th)
+                   - (bs - avg_b[None]))                               # [H, R, N, D]
+            avg_sigma = (n_eps_samples * avg_sigma
+                         + np.einsum('hrni,hrnj->rnij', eps, eps)) / (n_eps_samples + H_t)
+            n_eps_samples += H_t
 
         # Global trajectory update
         weights = jnp.ones((H_t, R, 1, N))
         alpha_t = alpha_lr * (t + t0) ** (-gamma_eta)
         theta = _fedlsa_one_round(theta, A_jax, b_jax, jnp.asarray(alpha_t), weights)
-
-        n_samples += H_t
 
         # Solve Lyapunov at T_i/2
         if (t + 1) in snap_at:

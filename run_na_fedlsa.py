@@ -46,6 +46,8 @@ def _run_trajectory_batch(kwargs: Dict[str, Any]) -> Dict[str, np.ndarray]:
     g.set_sample_rng(np.random.default_rng(kwargs["sample_seed"]))
     u = jnp.asarray(kwargs["u"])
 
+    theta_star = jnp.asarray(kwargs["theta_star"]) if "theta_star" in kwargs else None
+
     cfg = FedLSAConfig(
         num_rounds=T_max,
         local_steps=kwargs["local_steps"],
@@ -61,6 +63,7 @@ def _run_trajectory_batch(kwargs: Dict[str, Any]) -> Dict[str, np.ndarray]:
         boot_seed=kwargs["key_seed"],
         progress=False,
         snapshot_rounds=snapshot_rounds,
+        theta_star=theta_star,
     )
     theta_hist      = out["theta_hist"]        # [S, R, D]
     theta_boot_hist = out["theta_boot_hist"]   # [S, R, B, D]
@@ -81,12 +84,13 @@ def _run_trajectory_batch(kwargs: Dict[str, Any]) -> Dict[str, np.ndarray]:
         gamma_H=kwargs["gamma_H"],
         n_traj=kwargs["n_traj_batch"],
         sample_seed=kwargs["sample_seed"],
+        sigma_burn_in=kwargs.get("sigma_burn_in", 0),
     )
     theta_T_lyap_list = [lyap_all[T]["theta_T_lyap"] for T in snapshot_rounds]
     Sigma_list        = [lyap_all[T]["Sigma"]         for T in snapshot_rounds]
     eta_T_lyap_list   = [lyap_all[T]["eta_T_lyap"]    for T in snapshot_rounds]
 
-    return {
+    result = {
         "rounds_hist":          np.asarray(rounds_hist),                   # [S]
         "theta_proj_hist":      np.asarray(theta_proj_hist),               # [S, R, 1]
         "theta_boot_proj_hist": np.asarray(theta_boot_proj_hist),          # [S, R, B, 1]
@@ -95,6 +99,9 @@ def _run_trajectory_batch(kwargs: Dict[str, Any]) -> Dict[str, np.ndarray]:
         "Sigma_hist":           np.stack(Sigma_list,        axis=0),       # [S, R, D, D]
         "eta_T_lyap_hist":      np.asarray(eta_T_lyap_list, dtype=float),  # [S]
     }
+    if "mse_hist" in out:
+        result["mse_hist"] = np.asarray(out["mse_hist"])                   # [T_max]
+    return result
 
 
 # ==============================================================
@@ -118,6 +125,7 @@ def run_sweep(
     gamma_H: float,
     num_bootstrap: int,
     seed: int,
+    sigma_burn_in: int = 0,
 ) -> List[Dict[str, float]]:
     """Fan out `n_traj` trajectories across workers ONCE. All (T, α) pairs
     are computed from the same snapshots in post-processing."""
@@ -133,6 +141,7 @@ def run_sweep(
     batch_sizes = [base + (1 if i < rem else 0) for i in range(num_workers)]
     batch_sizes = [b for b in batch_sizes if b > 0]
 
+    theta_star_np = np.asarray(theta_star)
     job_args = []
     for w, nb in enumerate(batch_sizes):
         job_args.append({
@@ -148,6 +157,8 @@ def run_sweep(
             "gamma_H": gamma_H,
             "num_bootstrap": num_bootstrap,
             "key_seed": seed + 1000 + w,              # independent bootstrap rng
+            "theta_star": theta_star_np,
+            "sigma_burn_in": sigma_burn_in,
         })
 
     results: List[Dict[str, np.ndarray]] = list(
@@ -164,6 +175,14 @@ def run_sweep(
     Sigma_all           = cat_axis1("Sigma_hist")                    # [S, n_traj, D, D]
     eta_hist            = results[0]["eta_hist"]                     # [S] (same across workers)
     eta_T_lyap_hist     = results[0]["eta_T_lyap_hist"]              # [S]
+
+    # Aggregate MSE across workers (weighted mean by batch size)
+    mse_hist = None
+    if "mse_hist" in results[0]:
+        mse_weighted = sum(
+            nb * r["mse_hist"] for nb, r in zip(batch_sizes, results)
+        )
+        mse_hist = mse_weighted / n_traj                              # [T_max]
 
     theta_star_proj = float(np.asarray(theta_star) @ u_np)
 
@@ -194,9 +213,16 @@ def run_sweep(
                 theta_T_lyap, Sigma, u_np, eta_T_lyap, float(ci_alpha)
             )
 
-            cov_q = float(((q_lo <= theta_star_proj) & (theta_star_proj <= q_hi)).mean())
-            cov_n = float(((n_lo <= theta_star_proj) & (theta_star_proj <= n_hi)).mean())
-            cov_l = float(((l_lo <= theta_star_proj) & (theta_star_proj <= l_hi)).mean())
+            ind_q = ((q_lo <= theta_star_proj) & (theta_star_proj <= q_hi)).astype(float)
+            ind_n = ((n_lo <= theta_star_proj) & (theta_star_proj <= n_hi)).astype(float)
+            ind_l = ((l_lo <= theta_star_proj) & (theta_star_proj <= l_hi)).astype(float)
+            cov_q = float(ind_q.mean())
+            cov_n = float(ind_n.mean())
+            cov_l = float(ind_l.mean())
+            n_r = ind_q.size
+            cov_q_se = float(ind_q.std(ddof=1) / np.sqrt(n_r))
+            cov_n_se = float(ind_n.std(ddof=1) / np.sqrt(n_r))
+            cov_l_se = float(ind_l.std(ddof=1) / np.sqrt(n_r))
 
             records.append({
                 "T": int(T),
@@ -206,11 +232,14 @@ def run_sweep(
                 "cov_q": cov_q,
                 "cov_n": cov_n,
                 "cov_l": cov_l,
+                "cov_q_se": cov_q_se,
+                "cov_n_se": cov_n_se,
+                "cov_l_se": cov_l_se,
                 "ci_q_width": float((q_hi - q_lo).mean()),
                 "ci_n_width": float((n_hi - n_lo).mean()),
                 "ci_l_width": float((l_hi - l_lo).mean()),
             })
-    return records
+    return records, mse_hist
 
 
 def main():
@@ -261,7 +290,7 @@ def main():
     with ProcessPoolExecutor(
         max_workers=num_workers, mp_context=spawn_ctx
     ) as executor:
-        records = run_sweep(
+        records, mse_hist = run_sweep(
             executor,
             garnet_cfg=garnet_cfg,
             sample_seed_base=sample_seed_base,
@@ -273,7 +302,21 @@ def main():
             num_workers=num_workers,
             num_bootstrap=num_bootstrap,
             seed=seed,
+            sigma_burn_in=sigma_burn_in,
         )
+
+    # Save and plot MSE trajectory
+    if mse_hist is not None:
+        mse_csv = "mse_trajectory.csv"
+        mse_df = pd.DataFrame({
+            "round": np.arange(1, len(mse_hist) + 1),
+            "mse": mse_hist,
+        })
+        mse_df.to_csv(mse_csv, index=False)
+        print(f"Saved MSE trajectory ({len(mse_hist)} rounds) to {mse_csv}")
+
+        from plot_mse import plot_mse
+        plot_mse(mse_csv, out_png="mse_trajectory.png")
 
     # Print and save
     by_T: Dict[int, List[Dict[str, float]]] = {}
@@ -288,13 +331,15 @@ def main():
     for ci_alpha in confidence_levels:
         print(f"\n=== confidence level 1 − α = {1 - ci_alpha:.2f} "
               f"(α = {ci_alpha}) ===", flush=True)
-        print(f"{'T':>6}  {'bias':>8}  {'cov_q':>6}  {'cov_n':>6}  {'cov_l':>6}  "
+        print(f"{'T':>6}  {'bias':>8}  {'cov_q':>15}  {'cov_n':>15}  {'cov_l':>15}  "
               f"{'w_q':>8}  {'w_n':>8}  {'w_l':>8}", flush=True)
-        print("-" * 72, flush=True)
+        print("-" * 99, flush=True)
         for T in sorted(by_T):
             r = next(r for r in by_T[T] if r["alpha"] == ci_alpha)
-            print(f"{T:>6}  {r['bias']:>8.4f}  {r['cov_q']:>6.3f}  "
-                  f"{r['cov_n']:>6.3f}  {r['cov_l']:>6.3f}  "
+            cq = f"{r['cov_q']:.3f}±{r['cov_q_se']:.3f}"
+            cn = f"{r['cov_n']:.3f}±{r['cov_n_se']:.3f}"
+            cl = f"{r['cov_l']:.3f}±{r['cov_l_se']:.3f}"
+            print(f"{T:>6}  {r['bias']:>8.4f}  {cq:>15}  {cn:>15}  {cl:>15}  "
                   f"{r['ci_q_width']:>8.4f}  {r['ci_n_width']:>8.4f}  "
                   f"{r['ci_l_width']:>8.4f}", flush=True)
 
