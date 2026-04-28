@@ -186,6 +186,17 @@ def run_sweep(
 
     theta_star_proj = float(np.asarray(theta_star) @ u_np)
 
+    S = len(rounds_hist)
+    A = len(confidence_levels)
+    cov_arrays = {
+        "T":          np.asarray(rounds_hist, dtype=int),                # [S]
+        "alphas":     np.asarray(confidence_levels, dtype=float),        # [A]
+        "n_traj":     np.asarray(n_traj, dtype=int),                     # scalar
+        "cov_q":      np.zeros((S, A)), "cov_q_std": np.zeros((S, A)),
+        "cov_n":      np.zeros((S, A)), "cov_n_std": np.zeros((S, A)),
+        "cov_l":      np.zeros((S, A)), "cov_l_std": np.zeros((S, A)),
+    }
+
     records: List[Dict[str, float]] = []
     for s, T in enumerate(rounds_hist):
         theta_proj      = jnp.asarray(theta_proj_all[s])             # [n_traj, 1]
@@ -197,7 +208,7 @@ def run_sweep(
 
         bias = float(abs(np.asarray(theta_proj).mean() - theta_star_proj))
 
-        for ci_alpha in confidence_levels:
+        for ai, ci_alpha in enumerate(confidence_levels):
             ci = multiplier_bootstrap_ci_jit(
                 theta_boot=theta_boot_proj,
                 theta_final=theta_proj,
@@ -219,10 +230,16 @@ def run_sweep(
             cov_q = float(ind_q.mean())
             cov_n = float(ind_n.mean())
             cov_l = float(ind_l.mean())
-            n_r = ind_q.size
-            cov_q_se = float(ind_q.std(ddof=1) / np.sqrt(n_r))
-            cov_n_se = float(ind_n.std(ddof=1) / np.sqrt(n_r))
-            cov_l_se = float(ind_l.std(ddof=1) / np.sqrt(n_r))
+            cov_q_std = float(ind_q.std(ddof=1) / np.sqrt(len(ind_q)))
+            cov_n_std = float(ind_n.std(ddof=1) / np.sqrt(len(ind_n)))
+            cov_l_std = float(ind_l.std(ddof=1) / np.sqrt(len(ind_l)))
+
+            cov_arrays["cov_q"][s, ai]     = cov_q
+            cov_arrays["cov_n"][s, ai]     = cov_n
+            cov_arrays["cov_l"][s, ai]     = cov_l
+            cov_arrays["cov_q_std"][s, ai] = cov_q_std
+            cov_arrays["cov_n_std"][s, ai] = cov_n_std
+            cov_arrays["cov_l_std"][s, ai] = cov_l_std
 
             records.append({
                 "T": int(T),
@@ -232,14 +249,14 @@ def run_sweep(
                 "cov_q": cov_q,
                 "cov_n": cov_n,
                 "cov_l": cov_l,
-                "cov_q_se": cov_q_se,
-                "cov_n_se": cov_n_se,
-                "cov_l_se": cov_l_se,
+                "cov_q_std": cov_q_std,
+                "cov_n_std": cov_n_std,
+                "cov_l_std": cov_l_std,
                 "ci_q_width": float((q_hi - q_lo).mean()),
                 "ci_n_width": float((n_hi - n_lo).mean()),
                 "ci_l_width": float((l_hi - l_lo).mean()),
             })
-    return records, mse_hist
+    return records, mse_hist, cov_arrays
 
 
 def main():
@@ -290,7 +307,7 @@ def main():
     with ProcessPoolExecutor(
         max_workers=num_workers, mp_context=spawn_ctx
     ) as executor:
-        records, mse_hist = run_sweep(
+        records, mse_hist, cov_arrays = run_sweep(
             executor,
             garnet_cfg=garnet_cfg,
             sample_seed_base=sample_seed_base,
@@ -336,15 +353,19 @@ def main():
         print("-" * 99, flush=True)
         for T in sorted(by_T):
             r = next(r for r in by_T[T] if r["alpha"] == ci_alpha)
-            cq = f"{r['cov_q']:.3f}±{r['cov_q_se']:.3f}"
-            cn = f"{r['cov_n']:.3f}±{r['cov_n_se']:.3f}"
-            cl = f"{r['cov_l']:.3f}±{r['cov_l_se']:.3f}"
+            cq = f"{r['cov_q']:.3f}±{r['cov_q_std']:.3f}"
+            cn = f"{r['cov_n']:.3f}±{r['cov_n_std']:.3f}"
+            cl = f"{r['cov_l']:.3f}±{r['cov_l_std']:.3f}"
             print(f"{T:>6}  {r['bias']:>8.4f}  {cq:>15}  {cn:>15}  {cl:>15}  "
                   f"{r['ci_q_width']:>8.4f}  {r['ci_n_width']:>8.4f}  "
                   f"{r['ci_l_width']:>8.4f}", flush=True)
 
     pd.DataFrame(records).to_csv(results_csv, index=False)
     print(f"\nSaved {len(records)} rows to {results_csv}")
+
+    cov_npz = "coverage_arrays.npz"
+    np.savez_compressed(cov_npz, **cov_arrays)
+    print(f"Saved coverage arrays {tuple(cov_arrays['cov_q'].shape)} to {cov_npz}")
 
 
 if __name__ == "__main__":
