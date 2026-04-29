@@ -273,22 +273,24 @@ def main():
     sample_seed_base = 33
 
     fedlsa_cfg = dict(
-        local_steps=20,
+        local_steps=5,
         alpha=1.0,
         n_traj=1024,
-        t0=1500.0,
+        t0=100.0,
         gamma_eta=0.6,
-        gamma_H=0.0,
+        gamma_H=0.2,
     )
 
-    num_workers = 20
+    num_workers = 15
     num_bootstrap = 256
+    sigma_burn_in = 1000
 
-    trajectory_lengths = [2000, 4000, 6000]
+    # trajectory_lengths = [4000, 6000, 8000, 10000, 12000, 14000]
+    trajectory_lengths = list(range(3000, 14001, 1000))
     confidence_levels = [0.05, 0.10, 0.20]
 
     seed = 7
-    results_csv = "results_sweep.csv"
+    results_csv = f"results_sweep_gamma_H={fedlsa_cfg['gamma_H']}.csv"
     # ==========================================================
 
     # Build one Garnet on the main process just to get θ* and features for u
@@ -332,8 +334,8 @@ def main():
         mse_df.to_csv(mse_csv, index=False)
         print(f"Saved MSE trajectory ({len(mse_hist)} rounds) to {mse_csv}")
 
-        from plot_mse import plot_mse
-        plot_mse(mse_csv, out_png="mse_trajectory.png")
+        # from plot_mse import plot_mse
+        # plot_mse(mse_csv, out_png="mse_trajectory.png")
 
     # Print and save
     by_T: Dict[int, List[Dict[str, float]]] = {}
@@ -363,7 +365,7 @@ def main():
     pd.DataFrame(records).to_csv(results_csv, index=False)
     print(f"\nSaved {len(records)} rows to {results_csv}")
 
-    cov_npz = "coverage_arrays.npz"
+    cov_npz = f"coverage_arrays_gamma_H={fedlsa_cfg['gamma_H']}.npz"
     np.savez_compressed(cov_npz, **cov_arrays)
     print(f"Saved coverage arrays {tuple(cov_arrays['cov_q'].shape)} to {cov_npz}")
 

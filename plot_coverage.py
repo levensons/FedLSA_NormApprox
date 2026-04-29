@@ -53,7 +53,7 @@ def plot_coverage(path: str = "coverage_arrays.npz",
     alphas = data["alphas"]
 
     fig, axes = plt.subplots(
-        1, len(alphas), figsize=(24, 8), sharex=True
+        1, len(alphas), figsize=(18, 6), sharex=True
     )
     if len(alphas) == 1:
         axes = [axes]
@@ -64,14 +64,15 @@ def plot_coverage(path: str = "coverage_arrays.npz",
                 continue
             mean = data[col][:, ai]
             line, = ax.plot(Ts, mean, label=label, color=color,
-                            marker="o", markersize=3, linewidth=1.2)
+                            marker="o", markersize=3, linewidth=1.4)
             if se_col in data:
                 se = data[se_col][:, ai]
-                lo = np.clip(mean - z * se, 0.0, 1.0)
-                hi = np.clip(mean + z * se, 0.0, 1.0)
-                ax.fill_between(Ts, lo, hi, color=color, alpha=0.2,
+                lo = mean - z * se
+                hi = mean + z * se
+                ax.fill_between(Ts, lo, hi, color=color, alpha=0.3,
                                 linewidth=0)
-        ax.axhline(1.0 - a, linestyle="--", color="black", linewidth=1.2,
+
+        ax.axhline(1.0 - a, linestyle="--", color="black", linewidth=1.4,
                    label=f"α = {1 - a:.2f}")
         ax.set_xlabel("T", fontsize=18)
         ax.set_title(f"α = {1 - a:.2f}", fontsize=20)
@@ -79,7 +80,6 @@ def plot_coverage(path: str = "coverage_arrays.npz",
         ax.set_xticks(Ts[::3])
         # ax.set_xticks(np.arange(Ts[0], Ts[-1] + 1, 2000))
         ax.grid(True, alpha=0.3)
-        ax.set_ylim(-0.02, 1.02)
         ax.legend(fontsize=18, loc="lower right")
 
     # axes[-1].set_xlabel("Communication rounds  T")
@@ -94,8 +94,9 @@ def plot_coverage(path: str = "coverage_arrays.npz",
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         path = sys.argv[1]
-    elif os.path.exists("coverage_arrays.npz"):
-        path = "coverage_arrays.npz"
-    else:
-        path = "results_sweep.csv"
-    plot_coverage(path)
+    elif os.path.exists("coverage_arrays_gamma_H=0.2.npz"):
+        path = "coverage_arrays_gamma_H=0.2.npz"
+    # else:
+    #     path = "results_sweep.csv"
+    out_png = "coverage_vs_T_gamma_H=0.2.png"
+    plot_coverage(path, out_png)
