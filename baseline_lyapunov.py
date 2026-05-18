@@ -67,20 +67,11 @@ def run_lyapunov_baseline(
 
     Ts = sorted(int(T) for T in trajectory_lengths)
     T_max = Ts[-1]
-    if sigma_burn_in >= Ts[0] // 2:
-        raise ValueError(
-            f"sigma_burn_in={sigma_burn_in} must be < min(T_i)/2 = {Ts[0] // 2}"
-        )
 
     garnet = Garnet(**garnet_cfg)
     N, D, R = garnet.nenvs, garnet.p, n_traj
 
     garnet.set_sample_rng(np.random.default_rng(sample_seed))
-
-    # T_i/2 → indices into Ts that snapshot there
-    snap_at: Dict[int, list] = {}
-    for i, T_i in enumerate(Ts):
-        snap_at.setdefault(T_i // 2, []).append(i)
 
     def _H_at(t):
         return max(1, int(math.ceil(local_steps * (t + 1) ** gamma_H)))
@@ -93,7 +84,6 @@ def run_lyapunov_baseline(
     n_eps_samples = 0      # for Σ̂_ε  (excludes burn-in)
 
     theta       = jnp.zeros((R, 1, D))          # global trajectory
-    theta_snaps = [jnp.zeros((R, 1, D)) for _ in Ts]  # per-T_i trajectories
     results: Dict[int, Dict[str, Any]] = {}
 
     for t in range(T_max):
@@ -123,27 +113,13 @@ def run_lyapunov_baseline(
         theta = _fedlsa_one_round(theta, A_jax, b_jax, jnp.asarray(alpha_t), weights)
 
         # Solve Lyapunov at T_i/2
-        if (t + 1) in snap_at:
+        if (t + 1) in Ts:
             A_bar     = avg_A.mean(axis=1)            # [R, D, D]
             Sigma_eps = avg_sigma.mean(axis=1) / N    # [R, D, D]
             Sigma = _solve_lyapunov_batched(A_bar, Sigma_eps)
-            for idx in snap_at[t + 1]:
-                results[Ts[idx]] = {"Sigma": Sigma}
+            results[t + 1] = {"Sigma": Sigma,
+                              "theta_T_lyap": np.asarray(theta[:, 0, :]),
+                              "eta_T_lyap": alpha_t}
 
-        # Per-T_i trajectory updates (same samples, local step-size schedule)
-        for i, T_i in enumerate(Ts):
-            T_half = T_i // 2
-            if t < T_half or t >= T_i:
-                continue
-            t_local = t - T_half
-            alpha_local = alpha_lr * (t_local + t0 + 1.0) ** (-gamma_eta)
-            theta_snaps[i] = _fedlsa_one_round(
-                theta_snaps[i], A_jax, b_jax, jnp.asarray(alpha_local), weights)
-
-    # Attach final iterates and step sizes
-    for i, T_i in enumerate(Ts):
-        T_half = T_i // 2
-        results[T_i]["theta_T_lyap"] = np.asarray(theta_snaps[i][:, 0, :])
-        results[T_i]["eta_T_lyap"]   = alpha_lr * (T_half - 1 + t0 + 1.0) ** (-gamma_eta)
 
     return results

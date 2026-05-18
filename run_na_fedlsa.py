@@ -281,16 +281,16 @@ def main():
         gamma_H=0.2,
     )
 
-    num_workers = 15
+    num_workers = 7
     num_bootstrap = 256
-    sigma_burn_in = 1000
+    sigma_burn_in = 500
 
     # trajectory_lengths = [4000, 6000, 8000, 10000, 12000, 14000]
-    trajectory_lengths = list(range(3000, 14001, 1000))
+    trajectory_lengths = list(range(1000, 14001, 1000))
     confidence_levels = [0.05, 0.10, 0.20]
 
     seed = 7
-    results_csv = f"results_sweep_gamma_H={fedlsa_cfg['gamma_H']}.csv"
+    results_csv = f"results_sweep_gamma_H={fedlsa_cfg['gamma_H']}_new.csv"
     # ==========================================================
 
     # Build one Garnet on the main process just to get θ* and features for u
@@ -365,7 +365,7 @@ def main():
     pd.DataFrame(records).to_csv(results_csv, index=False)
     print(f"\nSaved {len(records)} rows to {results_csv}")
 
-    cov_npz = f"coverage_arrays_gamma_H={fedlsa_cfg['gamma_H']}.npz"
+    cov_npz = f"coverage_arrays_gamma_H={fedlsa_cfg['gamma_H']}_new.npz"
     np.savez_compressed(cov_npz, **cov_arrays)
     print(f"Saved coverage arrays {tuple(cov_arrays['cov_q'].shape)} to {cov_npz}")
 

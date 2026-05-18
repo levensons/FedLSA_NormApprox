@@ -49,7 +49,7 @@ def plot_coverage(path: str = "coverage_arrays.npz",
         data = _load_npz(path)
     else:
         data = _load_csv(path)
-    Ts = data["T"]
+    Ts = data["T"][1:]
     alphas = data["alphas"]
 
     fig, axes = plt.subplots(
@@ -62,11 +62,11 @@ def plot_coverage(path: str = "coverage_arrays.npz",
         for col, se_col, label, color in _ESTIMATORS:
             if col not in data:
                 continue
-            mean = data[col][:, ai]
+            mean = data[col][1:, ai]
             line, = ax.plot(Ts, mean, label=label, color=color,
                             marker="o", markersize=3, linewidth=1.4)
             if se_col in data:
-                se = data[se_col][:, ai]
+                se = data[se_col][1:, ai]
                 lo = mean - z * se
                 hi = mean + z * se
                 ax.fill_between(Ts, lo, hi, color=color, alpha=0.3,
@@ -94,8 +94,8 @@ def plot_coverage(path: str = "coverage_arrays.npz",
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         path = sys.argv[1]
-    elif os.path.exists("coverage_arrays_gamma_H=0.2.npz"):
-        path = "coverage_arrays_gamma_H=0.2.npz"
+    elif os.path.exists("coverage_arrays_gamma_H=0.2_new.npz"):
+        path = "coverage_arrays_gamma_H=0.2_new.npz"
     # else:
     #     path = "results_sweep.csv"
     out_png = "coverage_vs_T_gamma_H=0.2.png"
